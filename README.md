@@ -1,7 +1,9 @@
 # Sentrix AI | Field Intelligence Worker
 
 This repository contains the **Worker Node** software for the Sentrix AI Distributed Intelligence Mesh. The Worker acts as the "eyes" of the system, performing edge-side face detection and streaming intelligence to the Central Hub.
-**For better Understand Checkout Sentrix-AI Repo**
+
+
+>**For better Understand Checkout Sentrix-AI Repo**
 
 ---
 
