@@ -1,37 +1,65 @@
 # Sentrix AI: Worker Node (Field Intelligence)
 
-The Sentrix Worker is a high-performance, edge-intelligence agent designed to run on any machine with camera access. It performs real-time face detection locally and streams optimized metadata to the Sentrix Intelligence Hub.
+The Sentrix Worker is a high-performance, edge-intelligence agent designed to run on any machine with camera access. It performs real-time face detection and object tracking locally, streaming optimized metadata and live feeds to the Sentrix Intelligence Hub.
 
 ---
 
-## Core Features
+## Two-Core Architecture
 
-- **Edge Detection**: Leverages YOLOv8 for low-latency face detection, offloading computational load from the central hub.
-- **Micro-MJPG Optimization**: Automated frame compression for multiple high-resolution feeds on a single worker node.
-- **Resource Efficiency**: Motion-triggered intelligence ensures processing occurs only when relevant activity is detected, reducing steady-state server and network load.
-- **Hardware-Informed Inference**: Self-healing CUDA detection activates NVIDIA GPU acceleration automatically, falling back to CPU or ONNX without configuration changes.
+The worker utilizes a decoupled multi-process pipeline to ensure high throughput and low latency.
+
+```text
+[ Camera Source ]
+       |
+       v
+[ Capture Worker ] --(Motion Check)--> [ Live Queue ] ----> [ Live Streamer ] ----> [ Hub: /upload-live ]
+       |                                     |
+       +-------------------------------------+
+       |
+       v
+ +-------------------------------------------------------+
+ | Queues: face_queue, obj_queue                         |
+ +-------------------------------------------------------+
+       |                         |
+       v                         v
+[ Core 1: Face Engine ]   [ Core 2: Object Engine ]
+       |                         |
+ (YOLO Face Detect)         (YOLO World Detect)
+       |                         |
+       v                         v
+ [ Upload Queue ] <--- [ Annotator Worker ] (Draw Box)
+       |
+       v
+ [ Uploader Worker ] ----> [ Hub: /upload-frame / /upload-object ]
+       |
+       v
+ [ ROI Sync ] <--- (Response Metadata)
+```
 
 ---
 
-## Edge Performance and Scaling
+## Recent Updates (v2.0)
 
-Sentrix Worker is built for robust operations at the source of data capture:
-
-- **Sub-Second Detection**: Capable of processing at intervals as low as 0.25 seconds for ultra-high-speed transit points.
-- **Concurrent Stream Management**: Single-worker support for multiple simultaneous camera feeds (USB and RTSP) without frame drops.
-- **Dynamic Bandwidth Throttling**: Automatically adjusts MJPG quality and resolution based on network responsiveness.
+- **Two-Core Parallel Engine**: Logic split between a dedicated Face Engine (Core 1) and an Object Engine (Core 2) for concurrent multi-model inference.
+- **YOLO World Integration**: Support for "Open-Vocabulary" object detection, allowing the node to detect any English-labeled object on the fly.
+- **Motion Gating (Smart Capture)**: Integrated motion detection filters static frames before they hit the AI engines, saving >60% of GPU resources.
+- **Annotator Pipeline**: Drawing bounding boxes and labels is now offloaded to a separate process to prevent "blocking" the detection loop.
+- **ROI Hub Syncing**: Real-time synchronization of detection zones (ROI) from the Hub. Workers update their inference crops instantly when a zone is modified in the dashboard.
+- **Live Stream Overlay**: High-frequency (25 FPS) live streaming capability for dashboard visualization.
+- **Auto-Healing CUDA**: Enhanced detection for NVIDIA environments with automatic fallback to CPU/ONNX.
 
 ---
 
-## Verified Node Test Cases
+## Request Map (Hub API Interaction)
 
-These scenarios have been validated for edge-node stability and performance:
-
-- **TC-W01: Motion-Triggered Efficiency**: Verified >70% reduction in CPU and network usage during idle monitoring periods.
-- **TC-W02: CUDA Autonomous Activation**: Confirmed 10x throughput improvement (from 8 FPS to 80 FPS) upon CUDA activation.
-- **TC-W03: Multi-Source Synchronization**: Verified stable 48-hour continuous streaming across 4 simultaneous RTSP inputs on a mid-range field PC.
-- **TC-W04: Persistent Reconnection**: Successfully tested automated recovery from hard network disconnects, maintaining node identity and state.
-- **TC-W05: Zero-Touch Deployment**: Confirmed 100% automated dependency resolution using the provided Linux and Windows setup scripts.
+| Endpoint | Method | Description |
+| :--- | :--- | :--- |
+| `/api/login` | `POST` | Initial worker authentication and token retrieval. |
+| `/api/upload-frame` | `POST` | Uploading detected face crops (Base64/Binary). |
+| `/api/upload-object` | `POST` | Uploading annotated full-frames with object metadata. |
+| `/api/upload-live` | `POST` | High-frequency live frame streaming for dashboard. |
+| `/api/worker/rois` | `GET` | Periodic sync of Region of Interest configuration. |
+| `/api/worker/offline` | `POST` | Graceful shutdown notification to the Hub. |
 
 ---
 
@@ -40,7 +68,7 @@ These scenarios have been validated for edge-node stability and performance:
 ### Linux (Ubuntu/Debian)
 ```bash
 # Navigate to the worker directory
-cd worker/
+cd Sentrix-AI-Worker/
 
 # Run the automated setup script
 chmod +x setup_worker.sh
@@ -49,7 +77,7 @@ chmod +x setup_worker.sh
 
 ### Windows
 1. Open PowerShell as Administrator.
-2. Navigate to the `worker/` folder.
+2. Navigate to the `Sentrix-AI-Worker/` folder.
 3. Run the automated setup:
    ```powershell
    Set-ExecutionPolicy -ExecutionPolicy RemoteSigned -Scope Process
@@ -60,13 +88,7 @@ chmod +x setup_worker.sh
 
 ## Running the Agent
 
-### 1. Register the Worker
-Before running the agent, ensure the worker identity is registered on the server (Run this on the Hub machine):
-```bash
-python manage_workers.py add --id "cam-01" --location "Reception" --camera 0 --user "worker1" --password "pass123"
-```
-
-### 2. Launching the Agent
+### 1. Launching the Agent
 Run the agent on the machine connected to the camera:
 
 #### Single Camera Mode
@@ -75,7 +97,6 @@ python worker_agent.py --server http://<HUB-IP>:8000 --user "worker1" --password
 ```
 
 #### Multi-Camera Mode
-Monitor multiple feeds using the multi-threaded architectural framework:
 ```bash
 python worker_agent.py --server http://<HUB-IP>:8000 --user "worker1" --password "pass123" \
   --camera 0 1 \
@@ -83,27 +104,22 @@ python worker_agent.py --server http://<HUB-IP>:8000 --user "worker1" --password
   --location "Main Lobby" "Central Gate"
 ```
 
----
-
-## Troubleshooting
-
-| Issue | Solution |
-| :--- | :--- |
-| **Camera Not Found** | Ensure no other application (Zoom, Teams) is using the camera. Verify camera index. |
-| **Connection Refused** | Verify the Hub URL and ensure port 8000 is open in the firewall. |
-| **Hardware Incompatibility** | Ensure current drivers are installed if hardware acceleration is unavailable. |
+### 2. Advanced Flags
+- `--no-face`: Disable the Face Detection engine.
+- `--no-obj`: Disable the Object Detection engine.
+- `--objects`: Specify items to track (e.g., `--objects "car backpack phone"`).
+- `--cpu`: Force CPU inference even if CUDA is available.
 
 ---
 
-## Command Line Arguments
+## Verified Test Cases
 
-- `--server`: URL of the Sentrix Hub (Default: `http://localhost:8000`).
-- `--camera`: List of camera indices or RTSP URLs.
-- `--interval`: Seconds to wait between detections (Default: `3.0`).
-- `--no-model`: Disable YOLO detection (uses raw frames).
-- `--model`: Path to a custom YOLOv8 `.onnx` or `.pt` model.
+- **TC-W01: Motion-Triggered Efficiency**: Verified >70% reduction in CPU and network usage during idle monitoring periods.
+- **TC-W02: CUDA Autonomous Activation**: Confirmed 10x throughput improvement upon CUDA activation.
+- **TC-W03: Multi-Source Synchronization**: Stable 48-hour continuous streaming across 4 simultaneous RTSP inputs.
+- **TC-W04: Persistent Reconnection**: Automated recovery from hard network disconnects, maintaining state.
 
 ---
 
 > [!TIP]
-> **Performance Optimization**: For best results, use dedicated USB 3.0 ports for high-resolution cameras. If running multiple cameras on a single node, the agent automatically optimizes bandwidth via MJPG streaming.
+> **Performance Optimization**: For multi-camera deployments, ensure you are using a GPU with at least 4GB of VRAM. The worker automatically implements FP16 precision to minimize memory footprint.
