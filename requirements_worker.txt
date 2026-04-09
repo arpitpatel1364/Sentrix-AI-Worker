@@ -1,0 +1,10 @@
+# Python 3.10+ Recommended
+# --- FIELD NODE (WORKER) ---
+# Capture + Upload
+opencv-python==4.9.0.80
+requests==2.31.0
+numpy==1.26.4
+
+# Local Face Detection (YOLOv8)
+ultralytics==8.2.0
+onnxruntime>=1.18.0
